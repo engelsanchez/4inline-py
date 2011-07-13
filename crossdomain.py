@@ -16,7 +16,7 @@ serv = socket(AF_INET,SOCK_STREAM)
 serv.bind((ADDR))    #the double parens are to create a tuple with one element
 serv.listen(5)    #5 is the maximum number of queued connections we'll allow
 
-print 'listening...'
+print 'listening on port',PORT
 
 while True :  
   conn,addr = serv.accept() # block and accept the next connection

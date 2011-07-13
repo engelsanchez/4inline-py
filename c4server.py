@@ -33,6 +33,7 @@ class InvalidCommand(Exception):
   def __str__(self):
     return "Invalid command : " + msg
 
+
 class PlayerSocketError(Exception):
   """ Raised when a player connection is broken """
   def __init__(self, player, socket_error = None):
@@ -57,32 +58,32 @@ class Game(object):
   def __init__(self,player1,player2):
     Game.game_num += 1
     self.game_num = Game.game_num
-    self.players = (player1, player2)
+    self.players = [player1, player2]
     player1.game = self
     player2.game = self
     # create a 7 columns by 6 rows board
-    self.board = Game.ROWS * [Game.COLS*[0]] 
+    self.board = [Game.COLS*[Game.NO_PIECE] for i in xrange(Game.ROWS)] 
     self.turn=0
     self.last_piece = None
 
   def __str__(self):
-    return "Game %i (%s, %s)" % (sefl.game_num, self.player1, self.player2)
+    return "Game %i (%s, %s)" % (self.game_num, self.players[0], self.players[1])
 
   def turn_player(self):
     return self.players[self.turn]
- 
+
   def other_player(self, player):
     if not player:
       return self.players[1-self.turn]
     else:
-      return self.player1 if self.player2 == player else self.player2
+      return self.players[0] if self.players[1] == player else self.players[1]
 
   def remove_player(self, player):
     """ Removes player from game """
-    if player1 == player:
-      player1 = None
-    elif player2 == player:
-      player2 = None
+    if self.players[0] == player:
+      self.players[0] = None
+    elif self.players[1] == player:
+      self.players[1] = None
 
   def drop(self, col):
     """ 
@@ -94,7 +95,9 @@ class Game(object):
 
     for row in xrange(len(self.board)):
       piece = self.board[row][col]
+      print 'piece in %i,%i is %i' % (row,col,piece)
       if piece == Game.NO_PIECE:
+        print 'Placed piece in (%i,%i) ' % (row,col)
         self.board[row][col] = Game.RED_PIECE if self.turn == Game.RED_PLAYER else Game.BLACK_PIECE
         self.last_piece = (row, col)
         self.print_board()
@@ -104,7 +107,7 @@ class Game(object):
   def print_board(self):
     """ Simple debug print of a game board """
     print
-    for row in self.board:
+    for row in self.board[::-1]:
       print "  ",
       for col in row:
         print col,
@@ -167,7 +170,10 @@ class Player(object):
     Returns the next command sent from this player without the command terminator
     or possibly empty if the connection has been dropped
     """
-    msg = self.socket.recv(BUFSIZ)
+    try:
+      msg = self.socket.recv(BUFSIZ)
+    except socket.error as se:
+      raise PlayerSocketError(self, se)
     if not msg:
       return msg
     # messages must end in ';' right now. 
@@ -180,6 +186,7 @@ class Player(object):
 
   def send(self, msg):
     try:
+      print 'Sending message',msg,'to player',self
       self.socket.sendall(msg+';')
     except socket.error as e:
       raise PlayerSocketError(self, e)
@@ -187,7 +194,7 @@ class Player(object):
 
 class C4Server(object):
   """ Simple Connect Four server """
-  
+
   def __init__(self, port, backlog=5):
     # Players who have just joined, or were kicked out of a game, or finished a game 
     self.idle_players = []
@@ -203,7 +210,7 @@ class C4Server(object):
     self.server_socket.listen(backlog)
     # Trap keyboard interrupts
     signal.signal(signal.SIGINT, self.sighandler)
-  
+
   def all_players(self):
     """ Iterator over all players in any state """
     for player in self.idle_players:
@@ -211,8 +218,8 @@ class C4Server(object):
     for player in self.join_players:
       yield player
     for game in self.games:
-      yield game.player1
-      yield game.player2
+      yield game.players[0]
+      yield game.players[1]
 
   def sighandler(self, signum, frame):
     """ Close the server """
@@ -223,58 +230,36 @@ class C4Server(object):
     self.server_socket.close()
 
   def player_handler(self, player):
-    """ Generator that acts as a state machine that handles player inputs """
+    """ 
+    Generator that acts as a state machine that handles player inputs.
+    This is the meat of this server!!
+    """
     print "Init for player",player
     player.send("CONNECT4")
-    msg = yield 
 
     # Life loop (potentially multiple games)
     while True:
-      # Not yet in a game
-      if msg == 'JOIN':
-        self.handle_join(player)
-      # if disconnected
-      elif not msg:
-        return
-      else:
-        raise InvalidCommand(msg)
- 
-      # read next message and proceed to game state below
       msg = yield
-
-      # If sent message before being put in a game
-      if not player.game:
-        if msg == 'QUIT':
-          self.handle_player_quit(player)
-          continue
-        elif not msg:
-          return
+      # disconnect?
+      if not msg:
+        return
+      if msg == 'QUIT':
+        self.handle_player_quit(player)
+      elif not player.game:# Not yet in a game
+        if msg == 'JOIN':
+          self.handle_join(player)
         else:
-          raise InvalidCommand(msg)
-
-      # Game loop
-      while True:
-        # disconnected?
-        if not msg:
-          return
-  
-        # Bailing?
-        if msg == 'QUIT':
-          self.handle_player_quit(player)
-          # get next message and back to life loop (not in a game)
-          msg = yield
-          break
-
-        # Either in a game or exiting
-        if player.my_turn():
-          if self.handle_player_move(player):
+          player.send('INVALID_COMMAND')
+      elif player.my_turn():
+        try:
+          if self.handle_player_move(player,msg):
             self.handle_win(player.game)
-            break
-        # no game? no valid command besides QUIT above
-        else:
-          raise InvalidCommand(msg)
-
-      msg = player.next_msg()
+        except InvalidCommand as e:
+          player.send('INVALID_COMMAND')
+        except InvalidPlay as e:
+          player.send('INVALID_MOVE')
+      else:
+        player.send('INVALID_COMMAND')
 
   def handle_join(self, player):
     """ Handle join action """
@@ -283,7 +268,7 @@ class C4Server(object):
       self.idle_players.remove(player)
     self.join_players.append(player)
     player.send('JOINED')
-  
+
   def handle_win(self, game):
     winning_player = game.turn_player()
     winning_player.send('YOU_WIN')
@@ -312,28 +297,34 @@ class C4Server(object):
 
   drop_p = re.compile(r'^DROP (\d+)$')
 
-  def handle_player_move(self, player):
+  def handle_player_move(self, player, msg):
     """ During a player's turn, accept the next move command """
-    m = drop_p.match(msg)
+    print 'Player move:', msg, "from", player
+    m = C4Server.drop_p.match(msg)
     if m:
-      print "Move",m,"from",player
       col = int(m.group(1))
-      player.game.drop(col)
+      print "Drop in column", col
+      won = player.game.drop(col)
+      player.game.other_player(player).send('DROPPED %i' % (col))
+      return won
     else:
       raise InvalidCommand(msg)
 
   def disconnect_player(self, player):
     """ Handles player disconnection """
+    print 'disconnecting player',player
     self.handle_player_quit(player)
+    if self.idle_players.count(player):
+      self.idle_players.remove(player)
     try:
       player.socket.close()
     except Exception as e:
       print "On socket close : ", e
       pass
-    
+
   def handle_invalid_command(self, player):
     self.disconnect_player(player)
-  
+
   def handle_new_connections(self):
     # At least one user is trying to connect. Accept those connections
     client, address = self.server_socket.accept()
@@ -365,65 +356,72 @@ class C4Server(object):
     print "Will try to match", len(self.join_players),"in games"
     for player in self.join_players[:]:
       if one_player is None:
-	one_player = player
+        one_player = player
       else:
-	game = Game(one_player, player)
+        game = Game(one_player, player)
         # TODO These sends can fail and need to be handled
-	game.player1.send('PLAY')
-	game.player2.send('WAIT')
-	games.append(game)
-        print "Added game",game
-	one_player = None
-   
+        game.players[0].send('PLAY')
+        game.players[1].send('WAIT')
+        self.games.append(game)
+        print "Added game", game
+        one_player = None
     self.join_players[:] = [one_player] if one_player else []
-
 
   def serve(self):
     """ Main method of the server object """
     try:
       while True:
-	inputs = [self.server_socket]
-	inputs.extend(self.all_players())
-
-	try:
-          print "%i games, %i idle, %i join" % (len(self.games), len(self.idle_players),len(self.join_players))
-	  print "Will call select with %i input sockets " % (len(inputs))
-	  inputready,outputready,exceptready = select.select(inputs, [], [])
-	  print "Select returned with %i ready sockets " % (len(inputready))
-	  # Just bailing right now if anything goes wrong. 
-	  # TODO If error caused by bad socket, find it and remove it
-	except select.error as e:
-	  print "Select error : ", e
-	  break
-	except socket.error as e:
-	  print "Socket error ", e
-	  break
-	except Exception as e:
-	  print "Unexpected exception in select : ", e
-	  break
-
-	for s in inputready:
-	  if s == self.server_socket:
-	    self.handle_new_connections()
-	  else:
-	    player = s
-	    print "Will handle messages from player",player
-	    # handle player input
-	    try:
-	      player.handler.send(player.next_msg())
-	    except InvalidCommand as e:
-	      self.handle_invalid_command(player)
-	      # Handle normal exit
-	    except StopIteration as e:
-	      self.disconnect_player(player)
-	    except PlayerSocketError as e:
-	      print "Player",e.player," disconnected with error ", e.socket_error  
-	      self.disconnect_player(e.player)
-
+        inputs = [self.server_socket]
+        inputs.extend(self.all_players())
+        try:
+          print "%i games, %i idle, %i join" % (
+                   len(self.games), len(self.idle_players),len(self.join_players))
+          print "Will call select with %i input sockets " % (len(inputs))
+          inputready,outputready,exceptready = select.select(inputs, [], [])
+          print "Select returned with %i ready sockets " % (len(inputready))
+          # Just bailing right now if anything goes wrong. 
+          # TODO If error caused by bad socket, find it and remove it
+        except select.error as e:
+          print "Select error : ", e
+          break
+        except socket.error as e:
+          print "Socket error ", e
+          self.remove_bad_sockets(inputs)
+          continue
+        except Exception as e:
+          print "Unexpected exception in select : ", e
+          break
+        self.handle_messages(inputready)
+        # Pair up players who requested to join a game
         self.match_players()
     finally:
       print "Closing socket server"    
       self.server_socket.close()
+
+  def remove_bad_sockets(self, inputs):
+    """ Find and remove player sockets in a bad state """
+    # Find the offending socket
+    for player in inputs[:]:
+      try:
+        select.select([player],[],[], 0)
+      except socket.error as se:
+        self.disconnect_player(player)
+
+  def handle_messages(self, inputready):
+    for s in inputready:
+      if s == self.server_socket:
+        self.handle_new_connections()
+      else:
+        player = s
+        print "Will handle messages from player", player
+        try:
+          player.handler.send(player.next_msg())
+        # Handle normal exit
+        except StopIteration as e:
+          self.disconnect_player(player)
+        except PlayerSocketError as e:
+          print "Player",e.player," disconnected with error ", e.socket_error  
+          self.disconnect_player(e.player)
 
 if __name__ == "__main__":
   # the first argument is the listening port

@@ -26,18 +26,29 @@ class C4Client(object):
 
     try:
       while True:
+        userInt = False
+        print 'Waiting for server message...'
         try:
-	  msg = self.socket.recv(C4Client.BUFSIZ)
+          msg = self.socket.recv(C4Client.BUFSIZ)
         except socket.error as e:
           if e[0] == errno.EAGAIN:
             continue
           raise
-	print "Received :",msg
-        if not msg:
+        except KeyboardInterrupt as e:
+          userInt = True
+        if msg:
+          print "Received :",msg
+        if not msg and not userInt:
           break
-	msg = raw_input(">> ")
-        print "Will send message:",msg
-	self.socket.sendall(msg)
+        try:
+          msg = raw_input(">> ")
+        except KeyboardInterrupt as e:
+          print
+          msg = None
+        if msg:
+          print "Will send message:",msg
+          msg = msg if msg.endswith(';') else msg + ';'
+          self.socket.sendall(msg.upper())
     except Exception as e:
       print "Ended with exception", e
     finally:
