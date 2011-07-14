@@ -139,6 +139,8 @@ class Game(object):
   def is_valid_pos(self, row, col):
     return row >=0 and row < Game.ROWS and col >=0 and col < Game.COLS
 
+  def switch_turn(self):
+    self.turn = 1 - self.turn
 
 class Player(object):
   """ Information about a player and its associated network socket """
@@ -254,6 +256,8 @@ class C4Server(object):
         try:
           if self.handle_player_move(player,msg):
             self.handle_win(player.game)
+          else:
+            player.game.switch_turn()
         except InvalidCommand as e:
           player.send('INVALID_COMMAND')
         except InvalidPlay as e:
@@ -271,11 +275,13 @@ class C4Server(object):
 
   def handle_win(self, game):
     winning_player = game.turn_player()
-    winning_player.send('YOU_WIN')
+    winning_player.game = None
     losing_player = game.other_player(winning_player)
-    losing_player.send('YOU_LOSE')
+    losing_player.game = None
     self.idle_players.extend((winning_player, losing_player))
     self.games.remove(game)
+    winning_player.send('YOU_WIN')
+    losing_player.send('YOU_LOSE')
 
   def handle_player_quit(self, player):
     """ 
