@@ -21,17 +21,17 @@ class InvalidPlay(Exception):
     self.column = col
 
   def __str__(self):
-    return "Invalid move on column : " + col
+    return "Invalid move on column : " + self.column
 
 
 class InvalidCommand(Exception):
   """ Indicates the user has sent an invalid or unexpected command """
 
-  def __init(self,msg):
+  def __init__(self,msg):
     self.msg = msg
 
   def __str__(self):
-    return "Invalid command : " + msg
+    return "Invalid command : " + self.msg
 
 
 class PlayerSocketError(Exception):
@@ -141,6 +141,7 @@ class Game(object):
 
   def switch_turn(self):
     self.turn = 1 - self.turn
+
 
 class Player(object):
   """ Information about a player and its associated network socket """
@@ -259,16 +260,20 @@ class C4Server(object):
           else:
             player.game.switch_turn()
         except InvalidCommand as e:
+          print "Invalid message :",msg
           player.send('INVALID_COMMAND')
         except InvalidPlay as e:
+          print "Invalid move:",msg
           player.send('INVALID_MOVE')
       else:
+        print "Invalid command :",msg
         player.send('INVALID_COMMAND')
 
   def handle_join(self, player):
     """ Handle join action """
     print "Join from ",player
-    if self.idle_players.count(player):
+    n = self.idle_players.count(player)
+    for i in xrange(n):
       self.idle_players.remove(player)
     self.join_players.append(player)
     player.send('JOINED')
@@ -283,23 +288,35 @@ class C4Server(object):
     winning_player.send('YOU_WIN')
     losing_player.send('YOU_LOSE')
 
-  def handle_player_quit(self, player):
+  def handle_player_quit(self, player, for_good = None):
     """ 
     Handles player quit action in the middle of a game or waiting to join a game.
     The player goes back to idle state and can later try to join a game.
     """
     print "quit action ",player
-    if self.join_players.count(player):
+    for i in xrange(self.join_players.count(player)):
+      print 'removing from join player list'
       self.join_players.remove(player)
-    self.idle_players.append(player)
+
+    if for_good:
+      for i in xrange(self.idle_players.count(player)):
+        print 'removing from idle player list'
+        self.idle_players.remove(player)
+    elif not self.idle_players.count(player):
+      print 'adding to idle player list'
+      self.idle_players.append(player)
+
     if not player.game:
       return
+    print 'removing game ', player.game.game_num
     self.games.remove(player.game)
     player.game.remove_player(player)
     other_player = player.game.other_player(player)
     if other_player:
+      print 'Telling other player opponent left, adding to idle list'
       other_player.send('EXITED')
-      self.limbo_players.append(other_player)
+      other_player.game = None
+      self.idle_players.append(other_player)
 
   drop_p = re.compile(r'^DROP (\d+)$')
 
@@ -319,9 +336,7 @@ class C4Server(object):
   def disconnect_player(self, player):
     """ Handles player disconnection """
     print 'disconnecting player',player
-    self.handle_player_quit(player)
-    if self.idle_players.count(player):
-      self.idle_players.remove(player)
+    self.handle_player_quit(player, True)
     try:
       player.socket.close()
     except Exception as e:
@@ -332,9 +347,9 @@ class C4Server(object):
     self.disconnect_player(player)
 
   def handle_new_connections(self):
-    # At least one user is trying to connect. Accept those connections
+    """ Accepts all incoming connections and adds them to the idle player list """
+    # The server listen socket is non-blocking, so accept until you get EWOULDBLOCK
     client, address = self.server_socket.accept()
-    # Accept should not block, but watch out if it does
     while client is not None:
       print 'c4server: got connection %d from %s' % (client.fileno(), address)
       client.setblocking(0)
@@ -411,6 +426,7 @@ class C4Server(object):
       try:
         select.select([player],[],[], 0)
       except socket.error as se:
+        print 'Removing bad socket', player
         self.disconnect_player(player)
 
   def handle_messages(self, inputready):
@@ -428,6 +444,9 @@ class C4Server(object):
         except PlayerSocketError as e:
           print "Player",e.player," disconnected with error ", e.socket_error  
           self.disconnect_player(e.player)
+        except InvalidCommand as e:
+          print "Player sent invalid command", e.msg
+          self.disconnect_player(player)
 
 if __name__ == "__main__":
   # the first argument is the listening port

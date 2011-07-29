@@ -46,6 +46,8 @@ class C4Client(object):
           print
           msg = None
         if msg:
+          if msg.upper() == "EXIT":
+            break
           print "Will send message:",msg
           msg = msg if msg.endswith(';') else msg + ';'
           self.socket.sendall(msg.upper())
