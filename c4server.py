@@ -117,21 +117,21 @@ class Game(object):
   def check_win(self):
     """ Returns true if 4 were connected in the last play """
     piece = self.board[self.last_piece[0]][self.last_piece[1]]
-
-    n = 1
     for dir in [(1,0), (0,1), (1,1), (1,-1)]:
+      n = 1
       pos = [ self.last_piece[0] + dir[0], self.last_piece[1] + dir[1] ]
       while self.is_valid_pos(*pos) and self.piece_at(*pos) == piece:
         n += 1
         pos[0] += dir[0]
         pos[1] += dir[1]
-
       pos = [ self.last_piece[0] - dir[0], self.last_piece[1] - dir[1] ]
       while self.is_valid_pos(*pos) and self.piece_at(*pos) == piece:
         n += 1
         pos[0] -= dir[0]
         pos[1] -= dir[1]
-    return n >= 4
+      if n >= 4:
+        return True
+    return False
 
   def piece_at(self, row, col):
     return self.board[row][col]
@@ -209,7 +209,7 @@ class C4Server(object):
     self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     self.server_socket.setblocking(0)
     self.server_socket.bind(('',port))
-    print 'Listening to port',port,'...'
+    print 'Listening on port',port,'...'
     self.server_socket.listen(backlog)
     # Trap keyboard interrupts
     signal.signal(signal.SIGINT, self.sighandler)
@@ -252,16 +252,17 @@ class C4Server(object):
         if msg == 'JOIN':
           self.handle_join(player)
         else:
-          player.send('INVALID_COMMAND')
+          raise InvalidCommand(msg)
+          #player.send('INVALID_COMMAND')
       elif player.my_turn():
         try:
           if self.handle_player_move(player,msg):
             self.handle_win(player.game)
           else:
             player.game.switch_turn()
-        except InvalidCommand as e:
-          print "Invalid message :",msg
-          player.send('INVALID_COMMAND')
+#        except InvalidCommand as e:
+#          print "Invalid message :",msg
+#          player.send('INVALID_COMMAND')
         except InvalidPlay as e:
           print "Invalid move:",msg
           player.send('INVALID_MOVE')
@@ -286,7 +287,7 @@ class C4Server(object):
     self.idle_players.extend((winning_player, losing_player))
     self.games.remove(game)
     winning_player.send('YOU_WIN')
-    losing_player.send('YOU_LOSE')
+    #losing_player.send('YOU_LOSE')
 
   def handle_player_quit(self, player, for_good = None):
     """ 
@@ -328,7 +329,7 @@ class C4Server(object):
       col = int(m.group(1))
       print "Drop in column", col
       won = player.game.drop(col)
-      player.game.other_player(player).send('DROPPED %i' % (col))
+      player.game.other_player(player).send('DROPPED %i%s' % (col,(' WON' if won else '')))
       return won
     else:
       raise InvalidCommand(msg)
